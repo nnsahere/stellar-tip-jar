@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stellar Tip Jar - Level 1</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; color: #333; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 400px; text-align: center; }
+        h2 { margin-bottom: 10px; color: #1a1a1a; }
+        p { color: #666; font-size: 14px; margin-bottom: 20px; }
+        button { background-color: #7b2cbf; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; width: 100%; margin-bottom: 15px; transition: background 0.2s; }
+        button:hover { background-color: #5a189a; }
+        button:disabled { opacity: 0.7; cursor: not-allowed; }
+        .info-box { background: #f8f9fa; padding: 10px; border-radius: 6px; font-size: 13px; word-break: break-all; margin-bottom: 15px; text-align: left; }
+        input { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 15px; font-size: 14px; }
+        .qr-placeholder img { width: 150px; height: 150px; border: 1px solid #ddd; border-radius: 6px; margin: 15px 0; }
+        #status { font-size: 13px; margin-top: 10px; font-weight: 500; min-height: 18px; }
+    </style>
+    <!-- Memuat Stellar SDK -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stellar-sdk/11.2.2/stellar-sdk.min.js"></script>
+</head>
+<body>
+
+    <div class="card">
+        ☕ <h2>Stellar Tip Jar</h2>
+        <p>Dukung kreator dengan mengirimkan XLM di Testnet!</p>
+
+        <button id="connectBtn">Connect Freighter Wallet</button>
+
+        <div class="info-box" id="walletInfo" style="display: none;">
+            <strong>Connected Public Key:</strong><br>
+            <span id="publicKeyText">-</span><br><br>
+            <strong>XLM Balance:</strong> <span id="balanceText">0</span> XLM
+        </div>
+
+        <div class="qr-placeholder">
+            <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=GAJT2J6G..." alt="QR Code Donasi">
+        </div>
+
+        <div id="tipSection" style="display: none;">
+            <input type="number" id="amountInput" placeholder="Jumlah XLM (contoh: 1)" min="1" step="any">
+            <button id="sendBtn">Kirim Tip (XLM)</button>
+        </div>
+
+        <div id="status"></div>
+    </div>
+
+    <!-- Gunakan ES Module dari Skypack (paling stabil) -->
+    <script type="module">
+        import * as freighterModule from 'https://cdn.skypack.dev/@stellar/freighter-api';
+
+        // Skypack kadang membungkus named export di bawah `.default`,
+        // tergantung versi paket yang di-resolve. Ambil keduanya secara aman
+        // supaya tidak muncul "xxx is not a function" lagi di masa depan.
+        const freighter = {
+            ...(freighterModule.default || {}),
+            ...freighterModule,
+        };
+
+        const connectBtn = document.getElementById("connectBtn");
+        const walletInfo = document.getElementById("walletInfo");
+        const publicKeyText = document.getElementById("publicKeyText");
+        const balanceText = document.getElementById("balanceText");
+        const tipSection = document.getElementById("tipSection");
+        const sendBtn = document.getElementById("sendBtn");
+        const amountInput = document.getElementById("amountInput");
+        const statusDiv = document.getElementById("status");
+
+        let userPublicKey = "";
+
+        // Helper: beberapa versi freighter-api mengembalikan boolean langsung,
+        // versi lain mengembalikan object seperti { isConnected: true } atau
+        // { isConnected: true, error: undefined }. Fungsi ini menormalkan hasilnya.
+        function normalizeBoolResult(result) {
+            if (typeof result === "boolean") return result;
+            if (result && typeof result === "object") {
+                if ("isConnected" in result) return !!result.isConnected;
+                if ("isAllowed" in result) return !!result.isAllowed;
+            }
+            return !!result;
+        }
+
+        // Helper: ambil public key dari berbagai kemungkinan bentuk API
+        // (getPublicKey lama vs getAddress/getUserInfo di versi lebih baru).
+        async function getFreighterPublicKey() {
+            if (typeof freighter.getAddress === "function") {
+                const res = await freighter.getAddress();
+                if (typeof res === "string") return res;
+                if (res && typeof res === "object") return res.address || res.publicKey || "";
+            }
+            if (typeof freighter.getPublicKey === "function") {
+                return await freighter.getPublicKey();
+            }
+            throw new Error("Fungsi untuk mengambil public key tidak ditemukan di Freighter API.");
+        }
+
+        connectBtn.addEventListener("click", async () => {
+            statusDiv.style.color = "blue";
+            statusDiv.innerText = "Meminta izin pop-up Freighter...";
+
+            try {
+                // Pastikan library freighter berhasil dimuat dan berisi fungsi yang dibutuhkan
+                if (typeof freighter.isConnected !== "function") {
+                    statusDiv.style.color = "red";
+                    statusDiv.innerText = "Gagal memuat Freighter API. Coba muat ulang halaman.";
+                    return;
+                }
+
+                // Cek apakah ekstensi ada dan terhubung
+                const connectedRaw = await freighter.isConnected();
+                const connected = normalizeBoolResult(connectedRaw);
+                if (!connected) {
+                    statusDiv.style.color = "red";
+                    statusDiv.innerText = "Ekstensi Freighter tidak terdeteksi. Pastikan aktif di pojok kanan atas.";
+                    return;
+                }
+
+                // Paksa pop-up izin muncul (nama fungsi berbeda tergantung versi)
+                if (typeof freighter.setAllowed === "function") {
+                    await freighter.setAllowed();
+                } else if (typeof freighter.requestAccess === "function") {
+                    await freighter.requestAccess();
+                }
+
+                // Ambil Public Key
+                userPublicKey = await getFreighterPublicKey();
+
+                if (userPublicKey) {
+                    publicKeyText.innerText = userPublicKey;
+                    walletInfo.style.display = "block";
+                    tipSection.style.display = "block";
+                    connectBtn.innerText = "Wallet Connected ✅";
+                    connectBtn.disabled = true;
+                    statusDiv.innerText = "";
+
+                    await fetchBalance(userPublicKey);
+                } else {
+                    statusDiv.style.color = "red";
+                    statusDiv.innerText = "Tidak bisa mengambil public key dari Freighter.";
+                }
+            } catch (error) {
+                console.error(error);
+                statusDiv.style.color = "red";
+                statusDiv.innerText = "Koneksi dibatalkan atau pop-up belum diizinkan.";
+            }
+        });
+
+        async function fetchBalance(publicKey) {
+            try {
+                const server = new StellarSdk.Horizon.Server("https://horizon-testnet.stellar.org");
+                const account = await server.loadAccount(publicKey);
+
+                let xlmBalance = "0";
+                account.balances.forEach((balance) => {
+                    if (balance.asset_type === "native") {
+                        xlmBalance = balance.balance;
+                    }
+                });
+                balanceText.innerText = xlmBalance;
+            } catch (error) {
+                console.error("Gagal memuat saldo:", error);
+                balanceText.innerText = "0";
+            }
+        }
+
+        sendBtn.addEventListener("click", async () => {
+            const amount = amountInput.value;
+            if (!amount || amount <= 0) {
+                statusDiv.style.color = "red";
+                statusDiv.innerText = "Masukkan nominal XLM!";
+                return;
+            }
+
+            if (!userPublicKey) {
+                statusDiv.style.color = "red";
+                statusDiv.innerText = "Hubungkan wallet terlebih dahulu.";
+                return;
+            }
+
+            statusDiv.style.color = "blue";
+            statusDiv.innerText = "Meminta izin transaksi...";
+
+            try {
+                const server = new StellarSdk.Horizon.Server("https://horizon-testnet.stellar.org");
+                const destinationId = userPublicKey;
+
+                const sourceAccount = await server.loadAccount(userPublicKey);
+                const transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+                    fee: StellarSdk.BASE_FEE,
+                    networkPassphrase: StellarSdk.Networks.TESTNET,
+                })
+                    .addOperation(
+                        StellarSdk.Operation.payment({
+                            destination: destinationId,
+                            asset: StellarSdk.Asset.native(),
+                            amount: String(amount),
+                        })
+                    )
+                    .setTimeout(30)
+                    .build();
+
+                if (typeof freighter.signTransaction !== "function") {
+                    throw new Error("Fungsi signTransaction tidak tersedia di Freighter API.");
+                }
+
+                const signResult = await freighter.signTransaction(transaction.toXDR(), {
+                    network: "TESTNET",
+                    networkPassphrase: StellarSdk.Networks.TESTNET,
+                });
+                // Versi baru freighter-api mengembalikan { signedTxXdr, signerAddress }
+                const signedTxXdr = typeof signResult === "string" ? signResult : signResult.signedTxXdr;
+
+                if (!signedTxXdr) {
+                    throw new Error("Tidak menerima XDR transaksi yang sudah ditandatangani.");
+                }
+
+                statusDiv.innerText = "Mengirim ke jaringan Stellar...";
+                const txer = new StellarSdk.Transaction(signedTxXdr, StellarSdk.Networks.TESTNET);
+                const response = await server.submitTransaction(txer);
+
+                statusDiv.style.color = "green";
+                statusDiv.innerHTML = `Berhasil! 🎉<br>Cek Hash: <a href="https://stellar.expert/explorer/testnet/tx/${response.hash}" target="_blank">${response.hash.substring(0, 10)}...</a>`;
+
+                await fetchBalance(userPublicKey);
+            } catch (error) {
+                console.error(error);
+                statusDiv.style.color = "red";
+                statusDiv.innerText = "Transaksi batal / gagal.";
+            }
+        });
+    </script>
+</body>
+</html>
